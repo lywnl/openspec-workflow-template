@@ -1,0 +1,31 @@
+name: fast-change
+version: 1
+description: 通用低风险变更工作流，使用中文提案与可验证任务清单。
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 说明问题、范围、风险与验收口径。
+    template: proposal.md
+    instruction: |
+      使用简体中文说明目标、实际依据、改动范围、非目标、风险和验收口径。
+      只适用于低风险、可回滚变更；发现安全、权限、迁移、破坏性契约或跨域事务风险时升级流程。
+      保留模板标题，内容基于项目事实，没有外部材料时注明真实来源。
+    requires: []
+  - id: tasks
+    generates: tasks.md
+    description: 按依赖列出实现和聚焦验证任务。
+    template: tasks.md
+    instruction: |
+      使用简体中文按依赖编写少量可独立验证的任务，每项给出实现范围与验证方法。
+      必需任务使用未勾选 checkbox，不预先声明实现或测试通过。
+      不强制生成 specs、design、详细 writing plan、页面审计或完整 API 自动化工程。
+    requires:
+      - proposal
+apply:
+  requires:
+    - tasks
+  tracks: tasks.md
+  instruction: |
+    遵循通用 openspec-apply-change 技能：确认低风险资格和有效规划评审后按 tasks.md 实施。
+    使用当前项目工程规则和聚焦验证；有真实证据才能勾选，环境阻塞保留未完成。
+    实施后核验任务与实际证据，正常归档前完成适用的验收。

@@ -1,0 +1,12 @@
+# 本地验证副本、日志、计划和临时环境，不随模板分发。
+/.codex/
+
+# macOS 元数据。
+.DS_Store
+._*
+
+# Python 运行缓存和本地虚拟环境。
+__pycache__/
+*.py[cod]
+.venv/
+venv/
