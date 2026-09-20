@@ -9,12 +9,13 @@ import json
 import os
 import re
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 
 IGNORED = {".git", "__pycache__", ".venv", "node_modules"}
-RECORD_VERSION = 2
+RECORD_VERSION = 1
 CHECKBOX = re.compile(r"^(\s*(?:[-*+]|\d+[.)])\s+\[)([ xX])(\])")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 
@@ -140,7 +141,31 @@ def check_plan(root: Path, change: str, profile: str) -> dict:
         raise EvidenceError("strict 缺少独立规划评审依据")
     equal(snapshot(root, data["inputs"], data["tasks"]), data["snapshot"], "规划或来源")
     equal(snapshot(root, data["reports"]), data["report_snapshot"], "规划评审报告")
+    started = data["implementation_started"]
+    if started is not None:
+        if not isinstance(started, str) or datetime.fromisoformat(started).tzinfo is None:
+            raise EvidenceError("实施开始时间格式无效")
+    if not isinstance(data["reference_inputs"], list) or not isinstance(data["reference_snapshot"], dict):
+        raise EvidenceError("实施参考基线格式无效")
+    if started is None:
+        equal(snapshot(root, data["reference_inputs"]), data["reference_snapshot"], "实施参考基线")
     return data
+
+
+def start_apply(root: Path, change: str, profile: str) -> dict:
+    data = check_plan(root, change, profile)
+    if data["implementation_started"] is None:
+        data["implementation_started"] = datetime.now(timezone.utc).isoformat()
+        atomic_json(record_path(root, change, "plan"), data)
+    return data
+
+
+def check_code_coverage(root: Path, references: list[str], code_inputs: list[str]) -> None:
+    scopes = [local(root, name) for name in code_inputs]
+    for reference in references:
+        target = local(root, reference)
+        if not any(target == scope or (scope.is_dir() and target.is_relative_to(scope)) for scope in scopes):
+            raise EvidenceError(f"验收代码范围未覆盖实施参考：{reference}；删除文件应登记其所属目录")
 
 
 def check_tasks(root: Path, tasks: str) -> None:
@@ -155,17 +180,36 @@ def check_verify(root: Path, change: str, profile: str) -> dict:
     if profile == "strict" and not data.get("independent"):
         raise EvidenceError("strict 缺少独立代码质量评审依据")
     check_tasks(root, plan["tasks"])
+    if plan["implementation_started"] is None:
+        raise EvidenceError("尚未登记实施开始，不能核验验收通过")
     if digest(record_path(root, change, "plan").read_bytes()) != data["plan_record_sha256"]:
         raise EvidenceError("规划评审记录已变化，需要重新核对验收")
     equal(snapshot(root, data["inputs"]), data["snapshot"], "实现、任务或验收证据")
+    check_code_coverage(root, plan["reference_inputs"], data["code_inputs"])
     return data
+
+
+def atomic_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=".evidence-", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
 
 def write_record(root: Path, change: str, kind: str, data: dict) -> Path:
     path = record_path(root, change, kind)
     path.parent.mkdir(parents=True, exist_ok=True)
     data.update(version=RECORD_VERSION, kind=kind, change=change, recorded_at=datetime.now(timezone.utc).isoformat())
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    atomic_json(path, data)
     return path
 
 
@@ -181,17 +225,28 @@ def record(args: argparse.Namespace, root: Path, change: str) -> Path:
         if not states:
             raise EvidenceError("机器核验需要非空 Markdown checkbox 任务清单；其他格式按共享规则人工核验")
         metadata = label(root, str(Path(change) / ".openspec.yaml"))
+        references = sorted({label(root, item) for item in args.reference})
         inputs = sorted({label(root, item) for item in args.plan + args.source} | {tasks, metadata})
         reports = sorted({report} | ({independent} if independent else set()))
+        for reference in references:
+            ref_path = local(root, reference)
+            if any(ref_path.is_relative_to(local(root, name)) or local(root, name).is_relative_to(ref_path)
+                   for name in inputs + reports):
+                raise EvidenceError(f"规划约束与实施参考范围不能重叠：{reference}")
         destination = record_path(root, change, "plan")
         # 输出不能成为自己的输入，否则记录后基线会立即失效。
-        reject_output_input(root, destination, inputs + reports)
+        reject_output_input(root, destination, inputs + reports + references)
         return write_record(root, change, "plan", dict(
             common, decision="PASS", inputs=inputs, tasks=tasks, reports=reports,
-            snapshot=snapshot(root, inputs, tasks), report_snapshot=snapshot(root, reports),
+            reference_inputs=references, reference_snapshot=snapshot(root, references),
+            implementation_started=None, snapshot=snapshot(root, inputs, tasks), report_snapshot=snapshot(root, reports),
         ))
     plan = check_plan(root, change, args.profile)
+    if plan["implementation_started"] is None:
+        raise EvidenceError("尚未登记实施开始，不能生成验收通过")
     check_tasks(root, plan["tasks"])
+    code_inputs = sorted({label(root, item) for item in args.code})
+    check_code_coverage(root, plan["reference_inputs"], code_inputs)
     for item in args.evidence:
         require_report(root, item)
     inputs = sorted({label(root, item) for item in args.code + args.evidence} | {report, plan["tasks"]}
@@ -200,6 +255,7 @@ def record(args: argparse.Namespace, root: Path, change: str) -> Path:
     reject_output_input(root, destination, inputs)
     return write_record(root, change, "verify", dict(
         common, decision="Ready for Archive", inputs=inputs, snapshot=snapshot(root, inputs),
+        code_inputs=code_inputs,
         plan_record_sha256=digest(record_path(root, change, "plan").read_bytes()),
     ))
 
@@ -214,7 +270,7 @@ def reject_output_input(root: Path, output: Path, inputs: list[str]) -> None:
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest="command", required=True)
-    for name in ("record-plan", "check-plan", "record-verify", "check-verify"):
+    for name in ("record-plan", "check-plan", "start-apply", "record-verify", "check-verify"):
         command = commands.add_parser(name)
         command.add_argument("--root", required=True, help="获准访问的项目根")
         command.add_argument("--change", required=True, help="根内实际变更路径")
@@ -226,6 +282,7 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--tasks", required=True, help="CLI 确定的任务文件")
             command.add_argument("--plan", action="append", required=True, help="规划输入文件或目录，可重复")
             command.add_argument("--source", action="append", default=[], help="已登记来源或约束，可重复")
+            command.add_argument("--reference", action="append", default=[], help="实施前参考代码、测试或配置，可重复")
         if name == "record-verify":
             command.add_argument("--code", action="append", required=True, help="相关实现、测试或配置，可重复")
             command.add_argument("--evidence", action="append", required=True, help="非空原始证据文件，可重复")
@@ -237,7 +294,12 @@ def main() -> int:
     try:
         root = Path(args.root).resolve(strict=True)
         change = label(root, args.change)
-        if args.command.startswith("record"):
+        if args.command == "start-apply":
+            data = start_apply(root, change, args.profile)
+            output = {"valid": True, "change": change, "profile": args.profile,
+                      "implementation_started": data["implementation_started"],
+                      "说明": "已核对实施入口基线；不代表获得实施授权。"}
+        elif args.command.startswith("record"):
             path = record(args, root, change)
             output = {"valid": True, "record": path.relative_to(root).as_posix(), "说明": "仅记录当前文件基线，不证明测试或评审语义。"}
         else:

@@ -20,13 +20,15 @@ SPEC.loader.exec_module(evidence)
 
 class EvidenceTests(unittest.TestCase):
     def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
+        validation = Path(__file__).resolve().parents[4] / ".codex/validation"
+        validation.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(dir=validation)
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name).resolve()
         self.change = "openspec/changes/example"
         self.tasks = f"{self.change}/tasks.md"
         self.report = f"{self.change}/reviews/change-review.md"
-        self.put(f"{self.change}/.openspec.yaml", "schema: fast-change\n")
+        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nworkflow_profile: standard\n")
         self.put(f"{self.change}/proposal.md", "# 提案\n修复边界条件。\n")
         self.put(self.tasks, "- [ ] 1. 修复并验证边界条件\n")
         self.put(self.report, "# 规划评审\nPASS\n")
@@ -41,7 +43,7 @@ class EvidenceTests(unittest.TestCase):
 
     def plan(self, **kwargs):
         args = dict(command="record-plan", profile="standard", independent=None, report=self.report,
-                    tasks=self.tasks, plan=[f"{self.change}/proposal.md"], source=[])
+                    tasks=self.tasks, plan=[f"{self.change}/proposal.md"], source=[], reference=[])
         args.update(kwargs)
         return evidence.record(SimpleNamespace(**args), self.root, self.change)
 
@@ -53,6 +55,7 @@ class EvidenceTests(unittest.TestCase):
 
     def ready(self):
         self.plan()
+        evidence.start_apply(self.root, self.change, "standard")
         self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
         self.verify()
 
@@ -74,6 +77,7 @@ class EvidenceTests(unittest.TestCase):
 
     def test_incomplete_tasks_cannot_record_acceptance(self):
         self.plan()
+        evidence.start_apply(self.root, self.change, "standard")
         with self.assertRaises(evidence.EvidenceError):
             self.verify()
 
@@ -102,6 +106,7 @@ class EvidenceTests(unittest.TestCase):
         self.put("reviewer.md", "独立规划评审 PASS\n")
         self.plan(profile="strict", independent="reviewer.md")
         evidence.check_plan(self.root, self.change, "strict")
+        evidence.start_apply(self.root, self.change, "strict")
         self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
         with self.assertRaises(evidence.EvidenceError):
             self.verify(profile="strict")
@@ -134,6 +139,7 @@ class EvidenceTests(unittest.TestCase):
         self.put("independent-plan.md", "独立规划评审：基线完整。\n")
         self.put("independent-code.md", "独立代码评审：未发现阻塞。\n")
         self.plan(profile="strict", independent="independent-plan.md")
+        evidence.start_apply(self.root, self.change, "strict")
         self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
         self.verify(profile="strict", independent="independent-code.md")
         evidence.check_verify(self.root, self.change, "strict")
@@ -184,13 +190,105 @@ class EvidenceTests(unittest.TestCase):
             self.plan()
         self.assertFalse(evidence.record_path(self.root, self.change, "plan").exists())
 
-    def test_old_snapshot_version_requires_revalidation(self):
+    def test_unknown_snapshot_format_rejected(self):
         path = self.plan()
         data = json.loads(path.read_text(encoding="utf-8"))
-        data["version"] = 1
+        data["version"] = 999
         path.write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaises(evidence.EvidenceError):
             evidence.check_plan(self.root, self.change, "standard")
+
+    def test_reference_drift_blocks_start_without_rewriting_record(self):
+        path = self.plan(reference=["src"])
+        original = path.read_bytes()
+        self.put("src/module.txt", "实施前意外变化\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "实施参考基线"):
+            evidence.start_apply(self.root, self.change, "standard")
+        self.assertEqual(original, path.read_bytes())
+
+    def test_started_reference_changes_allow_plan_and_repeat_start_is_read_only(self):
+        path = self.plan(reference=["src"])
+        evidence.start_apply(self.root, self.change, "standard")
+        original = path.read_bytes()
+        self.put("src/module.txt", "任务中的正常修改\n")
+        self.put("src/new.txt", "任务中的新增实现\n")
+        evidence.check_plan(self.root, self.change, "standard")
+        evidence.start_apply(self.root, self.change, "standard")
+        self.assertEqual(original, path.read_bytes())
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        self.verify()
+        evidence.check_verify(self.root, self.change, "standard")
+        self.put("src/new.txt", "验收之后的修改\n")
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.check_verify(self.root, self.change, "standard")
+
+    def test_start_does_not_exempt_changed_planning(self):
+        self.plan(reference=["src"])
+        evidence.start_apply(self.root, self.change, "standard")
+        self.put(self.tasks, "- [ ] 1. 改变验收口径\n")
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.start_apply(self.root, self.change, "standard")
+
+    def test_completed_tasks_without_start_cannot_record_acceptance(self):
+        self.plan()
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "尚未登记实施开始"):
+            self.verify()
+        self.assertFalse(evidence.record_path(self.root, self.change, "verify").exists())
+
+    def test_overlapping_reference_and_constraints_rejected(self):
+        for source, reference in (("src", "src/module.txt"), ("src/module.txt", "src"), ("src", "src")):
+            with self.subTest(source=source, reference=reference):
+                with self.assertRaisesRegex(evidence.EvidenceError, "不能重叠"):
+                    self.plan(source=[source], reference=[reference])
+
+    def test_acceptance_requires_code_coverage_of_references(self):
+        self.plan(reference=["src"])
+        evidence.start_apply(self.root, self.change, "standard")
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "未覆盖实施参考"):
+            self.verify(code=["src/module.txt"])
+
+    def test_deleted_reference_captured_by_parent_directory(self):
+        self.plan(reference=["src/module.txt"])
+        evidence.start_apply(self.root, self.change, "standard")
+        (self.root / "src/module.txt").unlink()
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        self.verify(code=["src"])
+        evidence.check_verify(self.root, self.change, "standard")
+        self.put("src/module.txt", "删除后又出现\n")
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.check_verify(self.root, self.change, "standard")
+
+    def test_start_apply_cli_and_v1_record(self):
+        path = self.plan(reference=["src"])
+        result = subprocess.run([os.sys.executable, "-B", str(Path(evidence.__file__)),
+            "start-apply", "--root", str(self.root), "--change", self.change, "--profile", "standard"],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["implementation_started"])
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 1)
+
+    def test_malformed_start_marker_rejected(self):
+        path = self.plan()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["implementation_started"] = True
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.check_plan(self.root, self.change, "standard")
+
+    def test_start_write_failure_preserves_original_record(self):
+        path = self.plan(reference=["src"])
+        original = path.read_bytes()
+        path.parent.chmod(0o500)
+        try:
+            self.assertFalse(os.access(path.parent, os.W_OK), "测试需要普通用户权限语义")
+            with self.assertRaises(OSError):
+                evidence.start_apply(self.root, self.change, "standard")
+        finally:
+            path.parent.chmod(0o700)
+        self.assertEqual(original, path.read_bytes())
+        self.assertFalse(list(path.parent.glob(".evidence-*")))
 
     def test_unreadable_directory_fails_instead_of_partial_snapshot(self):
         self.put("src/private/input.txt", "不可漏登记的输入\n")

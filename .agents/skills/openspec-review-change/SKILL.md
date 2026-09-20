@@ -11,12 +11,12 @@ description: 聚合评审 OpenSpec 规划的范围、来源、规格、设计和
 
 ## 执行
 
-1. 确认变更与 profile，从 CLI 获取依赖图及实际规划文件。缺少必需产物时列明缺口，不能评为可实施。
+1. 确认变更，从其 `.openspec.yaml` 读取 workflow_profile，从 CLI 获取 schema、依赖图及实际规划文件；报告和助手 --profile 沿用元数据。缺少必需产物或存在未解决等级冲突时列明缺口，不能评为可实施，fast 也不能省略 spec-driven 的必需规格或设计。
 2. 进行当前步骤必要的预检：CLI 与文件是否可读取、规则是否可取得、报告引用是否有效；按 [核验方式](../../shared/openspec/verification-evidence.md#核验方式) 选择并登记 machine 或 manual。规划评审不需要启动业务服务或执行真实模型调用。
-3. 检查范围、来源、可观察行为、关键决策、依赖和验收交接。没有外部材料时按对话/代码事实评审，不伪造外部覆盖结论。
+3. 检查范围、来源、可观察行为、关键决策、依赖和验收交接，排除“必须先验收通过才能进入验收”的循环任务。CLI 齐备和格式通过不代表语义通过。没有外部材料时按对话/代码事实评审，不伪造外部覆盖结论。
 4. 按 profile 使用检查表；strict 取得基于当前规划的独立评审。无法取得时说明阻塞，不暗中降级。standard 不因下层检查而强制另起子代理。
 5. 按根因合并发现，输出 PASS、PAUSE 或 BLOCK。规划通过不等于实现通过，也不扩大操作授权。
-6. 保存 `reviews/change-review.md`，fast 可用短格式。只有真实 PASS 后，machine 用 `record-plan` 记录规划与报告绑定；manual 保存并核对规划清单；strict 均需独立评审文件。
+6. 保存 `reviews/change-review.md`，引用已有需求与设计，fast 可用短格式。只有真实 PASS 后，machine 用 `record-plan` 绑定规划、持续约束和报告，用 `--reference` 单独登记允许实施修改的代码、测试及配置；不把所有读过的文件都列为 `--source`。manual 同样区分两类输入并保存清单；strict 均需独立评审文件。
 7. 立即按所选方式复核输入、报告、profile 与记录：machine 执行 `check-plan`，manual 重新枚举并比较清单。失败时查明差异，不能输出“指纹有效”。
 
 ## 复用与交接

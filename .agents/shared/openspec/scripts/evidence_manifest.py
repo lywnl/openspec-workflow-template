@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""核对结构化验收清单的覆盖关系；不解析测试日志语义。"""
+"""核对已登记验收条目的结构和引用；不证明完整覆盖或测试日志语义。"""
 from __future__ import annotations
 
 import argparse
@@ -42,9 +42,13 @@ def check(root: Path, manifest_path: str) -> dict:
         raise ManifestError("requirements 必须是非空数组")
     if not isinstance(commands, list):
         raise ManifestError("commands 必须是数组")
+    requirement_ids = set()
     for index, item in enumerate(requirements):
         if not isinstance(item, dict) or not isinstance(item.get("id"), str) or not item["id"]:
             raise ManifestError(f"requirements[{index}].id 缺失")
+        if item["id"] in requirement_ids:
+            raise ManifestError(f"requirements[{index}].id 重复：{item['id']}")
+        requirement_ids.add(item["id"])
         for key in ("implementation", "tests", "evidence"):
             for value in nonempty_list(item, key, index):
                 if not local(root, value).exists():
@@ -56,7 +60,7 @@ def check(root: Path, manifest_path: str) -> dict:
             raise ManifestError(f"commands[{index}].command 缺失")
         if not isinstance(item.get("cwd"), str) or not local(root, item["cwd"]).is_dir():
             raise ManifestError(f"commands[{index}].cwd 必须是根内目录")
-        if not isinstance(item.get("exit_code"), int):
+        if type(item.get("exit_code")) is not int:
             raise ManifestError(f"commands[{index}].exit_code 必须是整数")
         evidence = item.get("evidence")
         if not isinstance(evidence, str) or not local(root, evidence).is_file():

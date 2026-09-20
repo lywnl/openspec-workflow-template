@@ -52,17 +52,21 @@ fast 可以写成一段：风险等级及理由、范围与来源引用、必需
 
 ## 规划指纹
 
-记录当前 CLI 所确定的全部规划产物和本地来源，包含 `.openspec.yaml`、任务正文、规格目录及实际采用的共享规则。目录快照用于发现文件新增、删除和重命名。
+按用途登记输入，不把所有读过的文件永久冻结：`--plan` 包含 CLI 确定的规划产物、`.openspec.yaml`、任务正文和规格目录；`--source` 仅列持续约束，如已确认需求材料、实际采用的工程规则；`--reference` 列允许按任务修改的现有实现、测试及配置。没有现有实现时可以没有 reference。目录快照发现新增、删除和重命名，两类范围不能重叠；若任务本身要修改工程规则，该文件也应作为 reference，相关决策写入规划。
 
-只归一化任务文件中 checklist 行的 `[ ]` / `[x]` / `[X]` 状态；修改任务正文、验收标准或其他文件均应使基线变化。任务状态变化还需要在最终验收中检查，不能因规划指纹忽略状态就忽略任务完成度。
+持续约束中只归一化任务文件 checklist 行的 `[ ]` / `[x]` / `[X]` 状态；修改任务正文、验收标准或其他持续约束会使规划失效。任务状态在最终验收中按原文检查。
 
-报告内容也必须加入绑定。版本 2 指纹记录文件内容、普通文件类型和可执行位；结构化验收清单额外绑定需求到实现、测试和证据的引用。不证明评审者独立或结论正确，也不覆盖 ACL 等全部平台属性。strict 仍需真实独立评审依据。不得仅重新保存指纹来把旧报告升级为新评审。
+报告内容也必须加入绑定。`version: 1` 指纹记录文件内容、普通文件类型和可执行位；不证明评审身份、结论正确或 ACL 等全部平台属性。strict 仍需真实独立评审依据。不得仅重新保存指纹替代真实复审。
 
-先按 [核验方式](verification-evidence.md#核验方式) 选择 machine 或 manual。machine 使用 [scripts/evidence.py](scripts/evidence.py) 的 `record-plan` / `check-plan`。参数中 `--plan` 明确列出 CLI 的规划文件或目录，`--source` 列出本次已读取的来源与约束。所有路径相对于 `--root`，示例名称 `example-change` 需替换为实际变更：
+先按 [核验方式](verification-evidence.md#核验方式) 选择 machine 或 manual。machine 使用 [scripts/evidence.py](scripts/evidence.py) 的 `record-plan` / `check-plan`，首次获准实施使用 `start-apply`。所有路径相对于 `--root`，示例名称及源码目录需替换为实际变更：
 
 ```bash
-python3 .agents/shared/openspec/scripts/evidence.py record-plan --root . --change openspec/changes/example-change --profile standard --tasks openspec/changes/example-change/tasks.md --plan openspec/changes/example-change/proposal.md --plan openspec/changes/example-change/specs --plan openspec/changes/example-change/design.md --plan openspec/changes/example-change/tasks.md --source .agents/shared/openspec --report openspec/changes/example-change/reviews/change-review.md
+python3 .agents/shared/openspec/scripts/evidence.py record-plan --root . --change openspec/changes/example-change --profile standard --tasks openspec/changes/example-change/tasks.md --plan openspec/changes/example-change/proposal.md --plan openspec/changes/example-change/specs --plan openspec/changes/example-change/design.md --source AGENTS.md --reference src/changed-module --report openspec/changes/example-change/reviews/change-review.md
 python3 .agents/shared/openspec/scripts/evidence.py check-plan --root . --change openspec/changes/example-change --profile standard
+# 仅在已获实施授权并准备执行任务时：
+python3 .agents/shared/openspec/scripts/evidence.py start-apply --root . --change openspec/changes/example-change --profile standard
 ```
 
-fast 不传不存在的 specs/design。strict 额外传 `--independent` 指向真实独立评审报告。助手只在评审 PASS 后记录；其他结论直接保存在报告，不生成可复用的通过记录。manual 按共享步骤保存清单并重新核对，不执行这些 Python 命令，也不生成假机器通过记录。
+三个等级均登记实际 schema 的必需规划输入，fast 不因篇幅简短省略 spec-driven 的必需规格或设计；参数使用实际存在的路径。strict 额外传 `--independent` 指向真实独立评审报告。助手只在评审 PASS 后记录；其他结论直接保存在报告，不生成可复用的通过记录。manual 按共享步骤保存清单并重新核对，不执行这些 Python 命令，也不生成假机器通过记录。
+
+规划 JSON 在同一文件保存 reference_inputs、reference_snapshot 和 implementation_started。开始前 check-plan/start-apply 同时比较规划、报告及参考代码，漂移则停止；start-apply 通过后原子记录开始时间，不重写评审报告。开始后 check-plan 只检查持续约束与报告，正常任务修改交给验收核对；重复 start-apply 不刷新参考快照或时间，也不授权扩大范围。规划实质变化时真实复审并重新登记规划，之后再次核对实施入口。不要并发操作同一变更。

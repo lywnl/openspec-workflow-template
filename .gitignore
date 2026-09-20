@@ -1,11 +1,19 @@
-# 本地验证副本、日志、计划和临时环境，不随模板分发。
-/.codex/
+# 默认忽略项目中的所有文件，只保留模板所需的三个入口。
+*
 
-# macOS 元数据。
+# 保留忽略规则文件自身。
+!/.gitignore
+
+# 保留模板入口。
+!/AGENTS.md
+!/.agents/
+!/.agents/**
+!/openspec/
+!/openspec/**
+
+# 忽略目录内部的系统元数据、Python 缓存和本地虚拟环境。
 .DS_Store
 ._*
-
-# Python 运行缓存和本地虚拟环境。
 __pycache__/
 *.py[cod]
 .venv/
