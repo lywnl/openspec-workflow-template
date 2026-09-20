@@ -6,6 +6,7 @@
 
 # 保留模板入口。
 !/AGENTS.md
+!/README.md
 !/.agents/
 !/.agents/**
 !/openspec/
