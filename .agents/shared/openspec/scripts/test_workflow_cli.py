@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +14,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import unquote, urlsplit
 
 import evidence
 
@@ -145,21 +148,37 @@ class WorkflowCliTests(unittest.TestCase):
             self.put(f"{self.change}/specs/listing/spec.md", DELTA)
             self.put(f"{self.change}/sources/user-request.md", "U1：机器路径测试输入，不是实际业务需求。\n")
 
-    def records(self):
+    def records(self, navigation=False):
         """建立显式标注为测试样例的基线；不据此声称独立语义评审完成。"""
         self.put("src/example.txt", "隔离实现输入\n")
         self.put("tests/check.txt", "隔离验证输入\n")
         self.put(".codex/result.txt", "机器路径测试证据样例\n")
         report = f"{self.change}/reviews/change-review.md"
         self.put(report, "机器路径测试用报告；不构成真实规划或独立评审。\n")
+        if navigation:
+            self.put("AGENTS.md", "隔离项目的规则文件。\n")
+            self.put(".agents/shared/openspec/workflow-policy.md", "工作流规则测试输入。\n")
+            self.put(".agents/shared/openspec/sources.md", "来源规则测试输入。\n")
+            self.put("README.md", f"[验收报告]({self.change}/reports/verification.md)\n")
+            self.put(report, "机器路径测试用评审报告：[项目规则](../../../../AGENTS.md)\n")
+            if self.profile != "fast":
+                self.put(f"{self.change}/sources/user-request.md", "U1：导航测试输入。\n"
+                    "[项目规则](../../../../AGENTS.md)\n"
+                    "[工作流](../../../../.agents/shared/openspec/workflow-policy.md)\n"
+                    "[来源](../../../../.agents/shared/openspec/sources.md)\n"
+                    "[配置](../../../config.yaml)\n")
+            else:
+                proposal = self.root / self.change / "proposal.md"
+                proposal.write_text(proposal.read_text(encoding="utf-8") + "\n[规则](../../../AGENTS.md)\n", encoding="utf-8")
         plan_files = [f"{self.change}/proposal.md"]
         sources = ["openspec/specs"]
         if self.profile != "fast":
             plan_files.extend([f"{self.change}/design.md", f"{self.change}/specs"])
             sources.append(f"{self.change}/sources")
+        code_inputs = ["src", "tests", *(["README.md"] if navigation else [])]
         evidence.record(SimpleNamespace(command="record-plan", profile=self.profile,
             independent=report if self.profile == "strict" else None, report=report,
-            tasks=f"{self.change}/tasks.md", plan=plan_files, source=sources, reference=["src", "tests"]),
+            tasks=f"{self.change}/tasks.md", plan=plan_files, source=sources, reference=code_inputs),
             self.root, self.change)
         evidence.start_apply(self.root, self.change, self.profile)
         self.put(f"{self.change}/tasks.md", TASKS.replace("[ ]", "[x]"))
@@ -178,7 +197,7 @@ class WorkflowCliTests(unittest.TestCase):
             proofs.append(path)
         evidence.record(SimpleNamespace(command="record-verify", profile=self.profile,
             independent=code_review if self.profile == "strict" else None,
-            report=f"{self.change}/reports/verification.md", code=["src", "tests"], evidence=proofs),
+            report=f"{self.change}/reports/verification.md", code=code_inputs, evidence=proofs),
             self.root, self.change)
 
     def checkpoint(self, action, change=None, extra=None, expected=0):
@@ -300,6 +319,73 @@ class WorkflowCliTests(unittest.TestCase):
         self.assertTrue(journal["last_attempt"]["complete"])
         self.assertTrue(all(item["exit_code"] == 0 for item in journal["commands"]))
         self.assertNotIn(self.name, [item["name"] for item in json.loads(journal["commands"][-1]["stdout"])["changes"]])
+
+    def navigation_archive(self, profile):
+        self.new(profile)
+        self.planning()
+        self.records(navigation=True)
+        archive = "openspec/changes/archive/2026-10-18-" + self.name
+        extras = ["--profile", profile, "--archive", archive, "--link-file", "README.md"]
+        if profile != "fast":
+            self.put(".codex/sync/listing.md", MAIN_SPEC)
+            self.put(".codex/sync/plan.json", json.dumps({"targets": [
+                {"path": "openspec/specs/listing/spec.md", "after": ".codex/sync/listing.md"}]}))
+            extras.extend(["--sync-plan", ".codex/sync/plan.json"])
+        preview = self.checkpoint("links", extra=extras)
+        navigation_doc = f"{self.change}/proposal.md" if profile == "fast" else f"{self.change}/sources/user-request.md"
+        self.assertEqual(set(preview["pending_navigation_targets"]), {"README.md", navigation_doc})
+        originals = {name: (self.root / self.change / name).read_bytes() for name in (
+            "reviews/planning-review.json", "reviews/change-review.md", "reports/verification.json",
+            "reports/verification.md")}
+        self.checkpoint("prepare", extra=extras)
+        journal = json.loads((self.root / self.change / "reports/archive-checkpoint/journal.json").read_text())
+        targets = {**journal["targets"], **journal["navigation"]["targets"]}
+        self.assertEqual(bool(journal["targets"]), profile != "fast")
+        # 每一步从原检查点取得剩余目标，模拟可恢复的逐文件更新。
+        for name in sorted(targets):
+            self.assertIn(name, self.checkpoint("check")["pending_targets"])
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(base64.b64decode(targets[name]["expected"]["content_base64"]))
+        self.assertEqual(self.checkpoint("synced")["stage"], "synced")
+        self.checkpoint("check")
+        (self.root / archive).parent.mkdir(parents=True, exist_ok=True)
+        (self.root / self.change).rename(self.root / archive)
+        # 移动后的中断可以直接恢复，不能重建规划或验收通过记录。
+        self.assertEqual(self.checkpoint("check", archive)["stage"], "synced")
+        self.assertEqual(self.checkpoint("archived", archive)["stage"], "archived")
+        self.assertFalse((self.root / self.change).exists())
+        for name, original in originals.items():
+            self.assertEqual((self.root / archive / name).read_bytes(), original)
+        archived_doc = archive + navigation_doc[len(self.change):]
+        for name in ("README.md", archived_doc, f"{archive}/reports/archive-record.md"):
+            path = self.root / name
+            # 独立按文件位置解析链接，避免调用被测重写函数来证明自己正确。
+            for destination in re.findall(r"\]\(([^)]+)\)", path.read_text(encoding="utf-8")):
+                target = (path.parent / unquote(urlsplit(destination).path)).resolve()
+                self.assertTrue(target.exists(), f"{name} -> {destination}")
+        self.assertEqual((self.root / "README.md").read_text(), f"[验收报告]({archive}/reports/verification.md)\n")
+        if profile == "fast":
+            self.assertFalse((self.root / archive / "specs").exists())
+            self.assertEqual(list((self.root / "openspec/specs").iterdir()), [])
+        else:
+            text = (self.root / archived_doc).read_text()
+            self.assertEqual(text.count("../../../../../"), 3)
+            self.assertIn("[配置](../../../../config.yaml)", text)
+        # 原评审文件的历史地址保留原字节，归档报告提供可访问入口。
+        self.assertFalse((self.root / archive / "reviews/../../../../AGENTS.md").resolve().exists())
+        saved = json.loads((self.root / archive / "reports/archive-checkpoint/journal.json").read_text())
+        self.assertEqual(len(saved["navigation"]["preserved_links"]), 1)
+        self.assertTrue(saved["last_attempt"]["complete"])
+
+    def test_standard_archive_repairs_readme_and_all_four_source_links(self):
+        self.navigation_archive("standard")
+
+    def test_fast_navigation_archive_preserves_reports_without_empty_specs(self):
+        self.navigation_archive("fast")
+
+    def test_strict_navigation_archive_preserves_independent_review_inputs(self):
+        self.navigation_archive("strict")
 
 
 if __name__ == "__main__":

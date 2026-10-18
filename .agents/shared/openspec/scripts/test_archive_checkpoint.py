@@ -64,14 +64,150 @@ class ArchiveCheckpointTests(unittest.TestCase):
             profile="standard", mode="machine", sync_plan=".codex/sync/plan.json", spec_root="openspec/specs"))
 
     def apply_expected(self, data, names=None):
-        for name in names if names is not None else data["targets"]:
-            image = data["targets"][name]["expected"]
+        targets = checkpoint.all_targets(data)
+        for name in names if names is not None else targets:
+            image = targets[name]["expected"]
             target = self.root / name
             if image["content_base64"] is None:
                 target.unlink()
             else:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(base64.b64decode(image["content_base64"]))
+
+    def navigation_fixture(self):
+        """将导航文档与证据真实绑定到新的测试用记录，再开始归档测试。"""
+        self.source = f"{self.change}/sources/user-request.md"
+        self.put("AGENTS.md", "项目规则\n")
+        self.put("openspec/config.yaml", "schema: spec-driven\n")
+        self.put("README.md", f"[验收]({self.change}/reports/verification.md#结果)\n")
+        self.put(self.source, "[规则](../../../../AGENTS.md)\n[配置](../../../config.yaml)\n[提案](../proposal.md)\n")
+        self.put(f"{self.change}/reviews/change-review.md", "原规划报告 [规则](../../../../AGENTS.md)\n")
+        evidence.record(SimpleNamespace(command="record-plan", profile="standard", independent=None,
+            report=f"{self.change}/reviews/change-review.md", tasks=self.tasks,
+            plan=[f"{self.change}/proposal.md"], source=["openspec/specs", self.source, "AGENTS.md"],
+            reference=["src", "tests", "README.md"]), self.root, self.change)
+        evidence.start_apply(self.root, self.change, "standard")
+        evidence.record(SimpleNamespace(command="record-verify", profile="standard", independent=None,
+            report=f"{self.change}/reports/verification.md", code=["src", "tests", "README.md"],
+            evidence=[".codex/result.txt", f"{self.change}/reports/verification-manifest.json"]), self.root, self.change)
+
+    def test_navigation_updates_resume_and_original_records_remain_exact(self):
+        self.navigation_fixture()
+        originals = {path.relative_to(self.root).as_posix(): path.read_bytes()
+                     for path in (evidence.record_path(self.root, self.change, "plan"),
+                                  evidence.record_path(self.root, self.change, "verify"),
+                                  self.root / self.change / "reviews/change-review.md",
+                                  self.root / self.change / "reports/verification.md")}
+        source_before = (self.root / self.source).read_bytes()
+        data = self.prepare()
+        self.assertEqual(set(data["navigation"]["targets"]), {"README.md", self.source})
+        self.apply_expected(data, [*data["targets"], "README.md"])
+        saved = checkpoint.load(self.root, self.change)
+        self.assertEqual(checkpoint.check_baseline(self.root, self.change, saved), [self.source])
+        self.apply_expected(saved, [self.source])
+        self.assertEqual(checkpoint.check_baseline(self.root, self.change, saved), [])
+        with self.assertRaises(evidence.EvidenceError):
+            evidence.check_verify(self.root, self.change, "standard")
+        self.assertEqual(base64.b64decode(saved["navigation"]["targets"][self.source]["before"]["content_base64"]), source_before)
+        for name, original in originals.items():
+            self.assertEqual((self.root / name).read_bytes(), original)
+        self.assertEqual((self.root / "README.md").read_text(), f"[验收]({self.archive}/reports/verification.md#结果)\n")
+        self.assertEqual((self.root / self.source).read_text(),
+            "[规则](../../../../../AGENTS.md)\n[配置](../../../../config.yaml)\n[提案](../proposal.md)\n")
+        self.assertEqual([item["source"] for item in saved["navigation"]["preserved_links"]],
+                         [f"{self.change}/reviews/change-review.md"])
+
+    def test_navigation_rejects_unregistered_body_changes_and_report_rewrites(self):
+        self.navigation_fixture()
+        data = self.prepare()
+        self.apply_expected(data)
+        for name in ("README.md", self.source, f"{self.change}/reviews/change-review.md"):
+            path = self.root / name
+            original = path.read_bytes()
+            with self.subTest(path=name):
+                path.write_bytes(original + "额外改动\n".encode())
+                with self.assertRaises(checkpoint.CheckpointError):
+                    checkpoint.check_baseline(self.root, self.change, data)
+            path.write_bytes(original)
+
+    def test_navigation_expected_cannot_include_body_or_executable_changes(self):
+        self.navigation_fixture()
+        data = self.prepare()
+        journal = checkpoint.journal_path(self.root, self.change)
+        original = journal.read_bytes()
+        image = data["navigation"]["targets"]["README.md"]["expected"]
+        content = base64.b64decode(image["content_base64"])
+        for invalid in (checkpoint.content_image(content + b"extra\n", 0), checkpoint.content_image(content, 0o111)):
+            data["navigation"]["targets"]["README.md"]["expected"] = invalid
+            journal.write_text(checkpoint.encoded(data), encoding="utf-8")
+            with self.assertRaisesRegex(checkpoint.CheckpointError, "链接地址以外"):
+                checkpoint.load(self.root, self.change)
+            journal.write_bytes(original)
+
+    def test_missing_link_target_does_not_create_checkpoint(self):
+        self.put(f"{self.change}/sources/request.md", "[缺失](missing.md)\n")
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "链接目标不存在"):
+            self.prepare()
+        self.assertFalse(checkpoint.journal_path(self.root, self.change).exists())
+
+    def test_link_target_symlink_is_not_followed(self):
+        self.put(f"{self.change}/sources/request.md", "[链接](alias.md)\n")
+        (self.root / self.change / "sources/alias.md").symlink_to(self.root / self.change / "proposal.md")
+        with self.assertRaisesRegex(ValueError, "符号链接"):
+            self.prepare()
+        self.assertFalse(checkpoint.journal_path(self.root, self.change).exists())
+
+    def test_navigation_only_checkpoint_does_not_invent_spec_sync(self):
+        self.navigation_fixture()
+        data = checkpoint.prepare(self.root, self.change, SimpleNamespace(archive=self.archive,
+            profile="standard", mode="machine", sync_plan=None, spec_root="openspec/specs"))
+        self.assertEqual(data["targets"], {})
+        self.assertEqual(set(checkpoint.check_baseline(self.root, self.change, data)), {"README.md", self.source})
+        self.assertEqual(checkpoint.validation_commands(data, "synced")[1],
+                         ["validate", "example", "--strict", "--no-interactive"])
+
+    def test_no_navigation_or_specs_does_not_create_empty_checkpoint(self):
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "无需创建空检查点"):
+            checkpoint.prepare(self.root, self.change, SimpleNamespace(archive=self.archive,
+                profile="standard", mode="machine", sync_plan=None, spec_root="openspec/specs"))
+        self.assertFalse(checkpoint.journal_path(self.root, self.change).exists())
+
+    def test_navigation_cannot_skip_existing_delta_specs(self):
+        self.navigation_fixture()
+        self.put(f"{self.change}/specs/example/spec.md", "规格增量\n")
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "实际包含规格增量"):
+            checkpoint.prepare(self.root, self.change, SimpleNamespace(archive=self.archive,
+                profile="standard", mode="machine", sync_plan=None, spec_root="openspec/specs"))
+
+    def test_v1_checkpoint_without_navigation_remains_readable(self):
+        data = self.prepare()
+        data.pop("navigation")
+        checkpoint.atomic_write(checkpoint.journal_path(self.root, self.change), checkpoint.encoded(data))
+        saved = checkpoint.load(self.root, self.change)
+        self.assertEqual(saved["version"], 1)
+        self.assertNotIn("navigation", saved)
+        self.apply_expected(saved)
+        self.assertEqual(checkpoint.check_baseline(self.root, self.change, saved), [])
+
+    def test_additional_navigation_files_are_deduplicated_and_frozen(self):
+        self.put("docs/guide.md", f"[任务](../{self.change}/tasks.md)\n")
+        data = checkpoint.prepare(self.root, self.change, SimpleNamespace(archive=self.archive,
+            profile="standard", mode="machine", sync_plan=".codex/sync/plan.json", spec_root="openspec/specs",
+            link_file=["docs/guide.md", "./docs/guide.md"]))
+        self.assertEqual(data["navigation"]["files"].count("docs/guide.md"), 1)
+        self.assertIn("docs/guide.md", data["inputs"])
+        self.apply_expected(data)
+        self.assertEqual((self.root / "docs/guide.md").read_text(), f"[任务](../{self.archive}/tasks.md)\n")
+        self.put("docs/guide.md", "另一个目标\n")
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "不符合预登记状态"):
+            checkpoint.check_baseline(self.root, self.change, data)
+
+    def test_links_to_deleted_specs_cannot_pass_preparation(self):
+        self.put(f"{self.change}/sources/request.md", "[规范](../../../specs/example/spec.md)\n")
+        self.put(".codex/sync/plan.json", json.dumps({"targets": [{"path": self.target, "after": None}]}))
+        with self.assertRaisesRegex(checkpoint.CheckpointError, "待删除的规范"):
+            self.prepare()
+        self.assertFalse(checkpoint.journal_path(self.root, self.change).exists())
 
     def test_partial_sync_resumes_only_remaining_registered_targets(self):
         data = self.prepare()
