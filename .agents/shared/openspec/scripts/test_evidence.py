@@ -28,7 +28,7 @@ class EvidenceTests(unittest.TestCase):
         self.change = "openspec/changes/example"
         self.tasks = f"{self.change}/tasks.md"
         self.report = f"{self.change}/reviews/change-review.md"
-        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nworkflow_profile: standard\n")
+        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nx-workflow_profile: standard\n")
         self.put(f"{self.change}/proposal.md", "# 提案\n修复边界条件。\n")
         self.put(self.tasks, "- [ ] 1. 修复并验证边界条件\n")
         self.put(self.report, "# 规划评审\nPASS\n")
@@ -300,6 +300,108 @@ class EvidenceTests(unittest.TestCase):
                 evidence.snapshot(self.root, ["src"])
         finally:
             directory.chmod(0o755)
+
+    def test_main_report_can_also_be_independent_and_auxiliary(self):
+        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nx-workflow_profile: strict\n")
+        path = self.plan(profile="strict", independent=self.report,
+                         review_evidence=[self.report, str(self.root / self.report)])
+        data = evidence.check_plan(self.root, self.change, "strict")
+        self.assertEqual(data["reports"], [self.report])
+        self.assertEqual(data["independent"], self.report)
+        self.assertEqual(len(data["report_snapshot"]), 1)
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["version"], 1)
+
+    def test_auxiliary_plan_report_is_deduplicated_and_bound(self):
+        auxiliary = f"{self.change}/reviews/source-review.md"
+        self.put(auxiliary, "来源核对材料\n")
+        path = self.plan(review_evidence=[auxiliary, auxiliary, str(self.root / auxiliary)])
+        original = path.read_bytes()
+        data = evidence.check_plan(self.root, self.change, "standard")
+        self.assertEqual(set(data["reports"]), {self.report, auxiliary})
+        self.assertIn(auxiliary, data["report_snapshot"])
+        self.put(auxiliary, "发现必需行为遗漏\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "评审报告"):
+            evidence.check_plan(self.root, self.change, "standard")
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_auxiliary_verify_report_is_deduplicated_and_bound(self):
+        self.ready()
+        auxiliary = f"{self.change}/reviews/quality-review.md"
+        self.put(auxiliary, "实现核对材料\n")
+        report = f"{self.change}/reports/verification.md"
+        self.verify(review_evidence=[auxiliary, str(self.root / auxiliary), report])
+        data = evidence.check_verify(self.root, self.change, "standard")
+        self.assertEqual(data["inputs"].count(auxiliary), 1)
+        self.assertEqual(data["inputs"].count(report), 1)
+        self.assertIn(auxiliary, data["snapshot"])
+        self.put(auxiliary, "实现核对发现问题\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "验收证据"):
+            evidence.check_verify(self.root, self.change, "standard")
+
+    def test_invalid_auxiliary_reports_preserve_existing_records(self):
+        self.ready()
+        self.put("empty.md", " \n\t")
+        (self.root / "linked.md").symlink_to(self.root / self.report)
+        (self.root / "linked-dir").symlink_to(self.root / "src", target_is_directory=True)
+        invalid = ["missing.md", "empty.md", "src", "../outside.md", "linked.md", "linked-dir/module.txt"]
+        for kind, record in (("plan", self.plan), ("verify", self.verify)):
+            original = evidence.record_path(self.root, self.change, kind).read_bytes()
+            for name in invalid:
+                with self.subTest(kind=kind, path=name):
+                    with self.assertRaises(evidence.EvidenceError):
+                        record(review_evidence=[name])
+                    self.assertEqual(evidence.record_path(self.root, self.change, kind).read_bytes(), original)
+
+    def test_auxiliary_report_cannot_include_own_output(self):
+        self.ready()
+        for kind, record in (("plan", self.plan), ("verify", self.verify)):
+            path = evidence.record_path(self.root, self.change, kind)
+            original = path.read_bytes()
+            with self.subTest(kind=kind):
+                with self.assertRaisesRegex(evidence.EvidenceError, "即将写入的记录"):
+                    record(review_evidence=[str(path)])
+                self.assertEqual(path.read_bytes(), original)
+
+    def test_auxiliary_report_cannot_overlap_mutable_reference(self):
+        with self.assertRaisesRegex(evidence.EvidenceError, "不能重叠"):
+            self.plan(reference=["src"], review_evidence=["src/module.txt"])
+        self.assertFalse(evidence.record_path(self.root, self.change, "plan").exists())
+
+    def test_missing_raw_evidence_prevents_first_acceptance_record(self):
+        self.plan()
+        evidence.start_apply(self.root, self.change, "standard")
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        (self.root / "evidence/result.xml").unlink()
+        with self.assertRaises(evidence.EvidenceError):
+            self.verify()
+        self.assertFalse(evidence.record_path(self.root, self.change, "verify").exists())
+
+    def test_metadata_normalization_requires_new_review(self):
+        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nworkflow_profile: standard\n")
+        path = self.plan()
+        original = path.read_bytes()
+        self.put(f"{self.change}/.openspec.yaml", "schema: spec-driven\nx-workflow_profile: standard\n")
+        with self.assertRaisesRegex(evidence.EvidenceError, "规划或来源"):
+            evidence.check_plan(self.root, self.change, "standard")
+        self.assertEqual(path.read_bytes(), original)
+
+    def test_repeatable_review_evidence_cli_for_both_stages(self):
+        auxiliary = f"{self.change}/reviews/topic-review.md"
+        self.put(auxiliary, "附加核对材料\n")
+        common = [os.sys.executable, "-B", str(Path(evidence.__file__))]
+        suffix = ["--root", str(self.root), "--change", self.change, "--profile", "standard",
+                  "--review-evidence", auxiliary, "--review-evidence", auxiliary]
+        result = subprocess.run(common + ["record-plan", "--tasks", self.tasks,
+            "--plan", f"{self.change}/proposal.md", "--report", self.report] + suffix,
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(evidence.check_plan(self.root, self.change, "standard")["reports"].count(auxiliary), 1)
+        evidence.start_apply(self.root, self.change, "standard")
+        self.put(self.tasks, "- [x] 1. 修复并验证边界条件\n")
+        result = subprocess.run(common + ["record-verify", "--code", "src", "--evidence", "evidence/result.xml",
+            "--report", f"{self.change}/reports/verification.md"] + suffix, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(evidence.check_verify(self.root, self.change, "standard")["inputs"].count(auxiliary), 1)
 
 
 if __name__ == "__main__":

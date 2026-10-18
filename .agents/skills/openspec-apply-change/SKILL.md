@@ -5,11 +5,11 @@ description: 在有效规划评审和明确实施授权下，按 OpenSpec 任务
 
 # 实施变更
 
-读取 [工作流规则](../../shared/openspec/workflow-policy.md)、[上下文发现](../../shared/openspec/project-context.md) 和 [验收证据规则](../../shared/openspec/verification-evidence.md)。
+读取 [工作流规则](../../shared/openspec/workflow-policy.md)、[上下文发现](../../shared/openspec/project-context.md) 和 [验收证据规则](../../shared/openspec/verification-evidence.md)，复用未变化的内容。使用 manual 时才补读 [人工核验细节](../../shared/openspec/manual-verification.md)。
 
 ## 进入实施
 
-1. 确认用户的实施意图和具体变更，从变更 `.openspec.yaml` 读取 workflow_profile，获取 `openspec status --change "<变更名>" --json`；核对实际 schema、规划评审和已登记核验方式。报告及助手 --profile 须与元数据一致。
+1. 确认实施意图和具体变更，按共享元数据兼容规则解析等级，获取 `openspec status --change "<变更名>" --json`；核对实际 schema、规划评审及已登记核验方式，报告及助手 --profile 一致。
 2. 获取 `openspec instructions apply --change "<变更名>" --json`，读取实际 contextFiles 和当前指令。命令报告必需规划缺失时先补齐，不把错误忽略为默认许可。
 3. 读取与本次改动相关的工程规则、模块和测试，确认验证入口后输出简短的 `Pre-Code Context Gate: PASS`。
 4. 检查分支、无关改动及当前任务的环境和费用授权，按真实依赖确认至少一个可推进任务；遵循已有约定，不默认建分支、提交或启动服务。没有可推进任务时报告阻塞，不提前登记实施开始；其他已获授权的独立任务可以继续。
@@ -21,7 +21,7 @@ description: 在有效规划评审和明确实施授权下，按 OpenSpec 任务
 2. 查看真实实现、类型、接口和调用方，完成范围内的相干修改。
 3. 对新增行为和缺陷运行有意义的聚焦验证；测试方式与风险相称，不为低影响改动机械增加镜像测试。
 4. 登记实现文件、测试节点、命令、退出码、时间和代码状态；每个小任务证据成立后及时按 schema 标记完成。复用现有证据索引，原始日志直接引用，不强制逐任务创建独立 Markdown 报告。
-5. 实现缺陷就修复并重测。需求/设计缺陷回到 continue-change 修订与 review；不得删除必要任务或降低验收来换取通过。
+5. 实现缺陷就修复并重测。需求/设计缺陷回 continue-change 修订与 review；fast 范围升级时暂停受影响新增实现，按共享同目录补全流程调整 schema、skip_specs 和规划，再评审及登记实施入口。保留已有状态和证据，不降低验收来换取通过。
 6. 环境或授权受阻时登记 `ENVIRONMENT_NOTE`，保持相关任务未完成，继续其他独立且已获授权的工作。
 
 业务代码和测试放在项目既有目录，临时产物放 `.codex/`，正式证据索引放变更 `reports/`。不要将后端、前端、API 或数据库的项目特有技能设为所有项目的硬依赖。

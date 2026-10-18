@@ -218,6 +218,8 @@ def record(args: argparse.Namespace, root: Path, change: str) -> Path:
     if args.profile == "strict" and not independent:
         raise EvidenceError("strict 记录要求 --independent 指向真实独立评审报告")
     report = require_report(root, args.report)
+    # 兼容旧调用者未提供此可选属性；辅助材料沿用主报告的路径校验。
+    review_reports = {require_report(root, item) for item in getattr(args, "review_evidence", [])}
     common = {"profile": args.profile, "independent": independent}
     if args.command == "record-plan":
         tasks = label(root, args.tasks)
@@ -227,7 +229,7 @@ def record(args: argparse.Namespace, root: Path, change: str) -> Path:
         metadata = label(root, str(Path(change) / ".openspec.yaml"))
         references = sorted({label(root, item) for item in args.reference})
         inputs = sorted({label(root, item) for item in args.plan + args.source} | {tasks, metadata})
-        reports = sorted({report} | ({independent} if independent else set()))
+        reports = sorted({report} | ({independent} if independent else set()) | review_reports)
         for reference in references:
             ref_path = local(root, reference)
             if any(ref_path.is_relative_to(local(root, name)) or local(root, name).is_relative_to(ref_path)
@@ -250,7 +252,7 @@ def record(args: argparse.Namespace, root: Path, change: str) -> Path:
     for item in args.evidence:
         require_report(root, item)
     inputs = sorted({label(root, item) for item in args.code + args.evidence} | {report, plan["tasks"]}
-                    | ({independent} if independent else set()))
+                    | ({independent} if independent else set()) | review_reports)
     destination = record_path(root, change, "verify")
     reject_output_input(root, destination, inputs)
     return write_record(root, change, "verify", dict(
@@ -278,6 +280,8 @@ def parser() -> argparse.ArgumentParser:
         if name.startswith("record"):
             command.add_argument("--report", required=True, help="已经完成的通过报告")
             command.add_argument("--independent", help="真实独立评审依据")
+            command.add_argument("--review-evidence", action="append", default=[],
+                                 help="正式结论采用的非空辅助评审报告，可重复")
         if name == "record-plan":
             command.add_argument("--tasks", required=True, help="CLI 确定的任务文件")
             command.add_argument("--plan", action="append", required=True, help="规划输入文件或目录，可重复")

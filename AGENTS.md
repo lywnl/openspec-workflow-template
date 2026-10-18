@@ -18,7 +18,7 @@
 - 保留既有工程命令和模块边界，不为通用模板引入新的框架、服务、数据库或环境文件。
 - 配置、密钥和依赖服务沿用项目既有管理方式。不得把敏感配置原文写进报告。
 - 修改代码前读取目标目录的规则及相关实现和测试；测试覆盖与实际风险相称。
-- 临时文件、测试日志、截图和工具缓存放在当前项目的 `.codex/`，正式交付文件放在约定目录。
+- 临时文件、测试日志、截图和工具缓存放在当前项目的 `.codex/`，正式交付文件放在约定目录；维护本模板时验证样例、日志和工具环境统一放 `.codex/validation/`。
 
 ## OpenSpec 入口
 
@@ -31,7 +31,7 @@
 | 技能 | 职责 |
 | --- | --- |
 | `openspec-explore` | 调查现状、讨论目标与方案 |
-| `openspec-new-change` | 创建变更、确定范围与风险等级 |
+| `openspec-new-change` | 创建骨架、登记等级和必要来源，不自动生成 proposal |
 | `openspec-continue-change` | 生成下一份规划或修订已有规划 |
 | `openspec-review-change` | 评审规划，形成可核验的实施基线 |
 | `openspec-apply-change` | 按任务实施、测试并记录证据 |
@@ -43,14 +43,16 @@
 ## 模板维护
 
 - 七个技能共用 `.agents/shared/openspec/`，分发时保留相对目录；单独复制一个 `SKILL.md` 不构成完整安装。
+- 风险和元数据以 `workflow-policy.md` 为准，来源规则以 `sources.md` 为准；报告格式与辅助材料绑定在 `review-checklist.md`，实现验收在 `verification-evidence.md`。人工核验和归档恢复分别按需读取 `manual-verification.md`、`archive-workflow.md`。
 - 分发内容是本文件、`.agents/` 和 `openspec/`；`.agents/shared/openspec/scripts/` 中的标准库助手属于分发内容，不要携带 `.codex/` 中的验证副本、缓存或临时环境。
 - 本套技能包含项目无关的定制行为。它们不是未经修改的 CLI 生成文件，也不宣称由某个 CLI 版本原样生成。
-- 已有项目的 `openspec/config.yaml`、规范及变更应合并保留。不得通过重新初始化重置它们。
+- 已有项目的规则、skills、`openspec/config.yaml`、schemas、规范及变更应比较后合并，保留显式 schema 与用户修改。不得通过重新初始化重置它们。本仓库 `.gitignore` 只用于维护模板，不复制覆盖业务项目的忽略配置。
 - 已在 OpenSpec 1.12.0 的隔离副本确认：`init --tools codex` 会刷新部分同名技能并加入默认入口。本模板已有项目结构，无需再次 init；接入其他项目时先完成必要的 CLI 初始化，再合并定制模板。
 - 同一版本的 `update --force` 也已在隔离副本确认会覆盖定制技能。升级前比较差异，再决定合并；不要在真实项目中用 `--force` 试探。
-- 默认三个风险等级均使用 CLI 内置 spec-driven，按实际依赖组织 proposal、specs、design、tasks；等级改变规划深度和验收门槛，不删减必需产物。内置 schema 不需要复制到项目目录。
-- 默认机器核验适用于单根目录、普通文件和 UTF-8 Markdown checkbox 任务清单。其他 schema、跨根项目或符号链接按 [核验方式](.agents/shared/openspec/verification-evidence.md#核验方式) 适配，不宣称自动兼容任意项目。
+- 根配置默认 CLI 内置 spec-driven；new-change 根据风险显式选择 schema。新 fast 用模板的 fast-change，仅 proposal/tasks 并声明 skip_specs；standard/strict 保留完整四件套。已有变更按实际 schema，不删除原有产物，升级风险时在同目录补全并复评。
+- 新等级登记为 `x-workflow_profile`，兼容旧字段的顺序、冲突处理及规范化遵循共享工作流规则；CLI --strict 不等于风险等级。报告和助手参数应使用同一解析结果。
+- 默认机器核验适用于单根目录、普通文件和 UTF-8 Markdown checkbox 任务清单。其他 schema、跨根项目或符号链接按 [核验方式](.agents/shared/openspec/manual-verification.md#核验方式) 适配，不宣称自动兼容任意项目。
 - Python 3.9 及以上版本仅用于标准库证据助手，不要求业务项目采用 Python。无该运行时或布局不受支持时，按同一核验方式执行人工核验；项目强制机器门禁时先满足项目要求。
 - 证据及归档记录使用 `version: 1` 格式标识，保存普通文件类型、内容和可执行位；格式字段由工具管理，无需在日常提示词或回复中展开。
 - 规划约束和实施参考分别登记，获准实施后用 `start-apply` 核对入口基线。归档使用预登记同步计划、原记录哈希和真实 CLI 校验；机器与人工核验的能力边界见共享证据规则。
-- `.codex/validation/` 中按 `.gitignore` 纳入 Git 的检查与演练脚本是模板验证源码，仍不属于项目接入时的分发内容；它们在本模板内创建隔离样例，不依赖其他项目。测试样本与日志不纳入版本管理。
+- 可维护测试源码在 `.agents/shared/openspec/scripts/test_*.py`，样例、日志、缓存及临时环境在 `.codex/validation/` 并排除分发。标准库助手不依赖业务项目的 Python 环境；技能结构校验所需 PyYAML 仅安装在隔离工具环境。

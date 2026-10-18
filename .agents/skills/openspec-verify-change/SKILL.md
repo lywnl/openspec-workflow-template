@@ -5,7 +5,7 @@ description: 对照 OpenSpec 规划核验当前实现、任务、真实测试证
 
 # 核验实现
 
-读取 [工作流规则](../../shared/openspec/workflow-policy.md) 和 [验收证据规则](../../shared/openspec/verification-evidence.md)。本入口检查实现，不重新给规划文案打分。
+读取 [工作流规则](../../shared/openspec/workflow-policy.md) 和 [验收证据规则](../../shared/openspec/verification-evidence.md)，复用未变化的内容；manual 才补读 [人工核验细节](../../shared/openspec/manual-verification.md)。本入口检查实现，不重新给规划文案打分。
 
 没有实现、只需判断方案能否开始编码时使用 review-change。本入口复用有效规划评审及实施阶段的需求映射和运行证据；只补核缺口、差异及失效项，不重复生成一份规划评审或整套实现交接报告。
 
@@ -13,14 +13,14 @@ description: 对照 OpenSpec 规划核验当前实现、任务、真实测试证
 
 ## 执行
 
-1. 确认变更、源码与规划根，从变更 `.openspec.yaml` 读取 workflow_profile，核对报告及助手 --profile 一致，读取当前任务、规划评审及核验方式。machine 执行 `check-plan` 并确认已登记实施开始；manual 核对持续约束及实施开始记录。正常实施修改由当前验收负责，不因此重做规划评审；持续约束失效时先处理受影响规划。
+1. 确认变更、源码与规划根，按共享元数据兼容规则解析等级并核对报告及助手 --profile 一致，读取当前任务、规划评审及核验方式。machine 执行 `check-plan` 并确认已登记实施开始；manual 核对持续约束及开始记录。正常实施修改由当前验收负责，不因此重做规划评审；持续约束失效时先处理受影响规划。
 2. 识别每个必需行为、场景和任务对应的实际代码、测试及运行证据；非代码变更使用相应的实际验证。
 3. 检查完整性、正确性、设计一致性、失败路径、兼容性和项目工程约定；strict 覆盖所有声明的高风险边界。
 4. 核对相关代码、配置与证据是否属于当前基线。旧结果仅在其全部相关输入未变化且环境前提仍成立时复用；涉及真实外部状态时按项目要求重新确认或执行，不用缓存掩盖过期。
 5. 运行尚缺的必要验证，先核实外部服务、费用与环境操作授权；证据成立后及时更新对应验证任务状态与映射，不改写任务正文。无法执行时保留阻塞，不将 skip 或仅收集用例计入通过。
-6. strict 取得当前实现的独立代码质量评审，standard 根据实际争议和风险按需增加；记录发现与修复后的验证。
+6. strict 取得当前实现的真实独立代码质量评审，默认保存为 `reviews/implementation-review.md`，既有当前有效报告可沿用原路径；standard 按实际需要增加。记录发现和修复后的复核，不把代码审查写成真实环境验证通过。
 7. 输出 `reports/verification.md`，fast 可用共享短格式；standard/strict 引用现有结构化清单的详细映射，不再抄一遍同样的表。报告给出真实结论 `Ready for Archive`、`Needs Work` 或 `Not Ready`，说明异常、未测项和限制，每个发现关联具体任务/需求和实现位置。
-8. 只有 Ready for Archive 时绑定当前代码、任务、报告及原始证据。standard/strict 必须有 `reports/verification-manifest.json` 结构化映射；fast 可在短报告内维护映射，项目额外机器门禁仍须满足。machine 存在结构化清单时运行 `evidence_manifest.py` 并将清单纳入 `record-verify` 输入，没有清单的 fast 绑定短报告与原始证据；随后执行 `check-verify`。manual 核对相同映射要求，按共享步骤保存并比较人工文件指纹，不强制运行 Python 助手，报告范围与限制。其他结论不能保存为通过记录。
+8. 仅 Ready for Archive 且报告及辅助材料定稿后记录：standard/strict 必须维护 `reports/verification-manifest.json`；fast 可在短报告维护映射。machine 有清单时先运行 `evidence_manifest.py`，将清单及原始证据纳入 `record-verify`；strict 传独立代码评审路径，其他采用的辅助报告逐个传 `--review-evidence`，然后 `check-verify`。manual 按共享步骤比较相同范围及映射。未满足任务、真实环境要求或独立评审时只保留缺口报告，不保存通过记录。
 
 ## 回退与边界
 

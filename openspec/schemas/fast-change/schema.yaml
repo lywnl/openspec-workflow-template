@@ -1,0 +1,33 @@
+name: fast-change
+version: 1
+description: 不改变规范约定的低风险调整，只生成 proposal 和 tasks
+artifacts:
+  - id: proposal
+    generates: proposal.md
+    description: 问题、范围、非目标、风险、验收及来源
+    template: proposal.md
+    instruction: |
+      用简洁中文描述已确认的低风险调整。包括问题与依据、改动范围、非目标、
+      风险理由、可验证的验收标准及 Source Inputs 来源登记表。
+      仅用于不改变规范约定的修复、行为保持重构、文案或工具调整。
+      变更元数据须声明 skip_specs: true；新增或改变业务约定时升级 standard，
+      涉及权限、隔离、持久化迁移或破坏性契约时升级 strict，按共享规则补齐规划。
+    requires: []
+
+  - id: tasks
+    generates: tasks.md
+    description: 有明确范围与具体验证的精简任务清单
+    template: tasks.md
+    instruction: |
+      依据 proposal 将实现和具体验证写成未完成的 Markdown checkbox 任务。
+      写明实现位置、依赖及验证方法，不重复需求全文，不另建详细执行计划。
+      正式验收结论、指纹与归档是交付条件，不能成为进入验收的循环前置任务。
+    requires:
+      - proposal
+
+apply:
+  requires: [tasks]
+  tracks: tasks.md
+  instruction: |
+    按共享规则核对风险资格、有效规划评审和实施授权，再按 tasks.md 实施与聚焦验证。
+    保存真实证据；发现规范级行为变化时先升级流程并补齐规划，不继续新增实现。
